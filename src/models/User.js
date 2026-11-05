@@ -15,6 +15,8 @@ const userSchema = new mongoose.Schema(
     suggestedAmounts: { type: [Number], default: [900, 2500, 4500] },
     supportButtonText: { type: String, default: 'Support' },
     recurringEnabled: { type: Boolean, default: true },
+    featuredVideoId: { type: String, default: '' },
+    membershipEnabled: { type: Boolean, default: false },
     contact: {
       legalName: { type: String, trim: true, default: '' },
       email: { type: String, trim: true, default: '' },
@@ -38,6 +40,8 @@ userSchema.methods.toPublic = function () {
     suggestedAmounts: this.suggestedAmounts,
     supportButtonText: this.supportButtonText,
     recurringEnabled: this.recurringEnabled,
+    featuredVideoId: this.featuredVideoId || '',
+    membershipEnabled: Boolean(this.membershipEnabled),
     contact: {
       legalName: this.contact?.legalName || this.name,
       email: this.contact?.email || '',

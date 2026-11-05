@@ -6,7 +6,11 @@ import { connectDb } from './db.js';
 import authRoutes from './routes/auth.js';
 import pageRoutes from './routes/pages.js';
 import paymentRoutes, { webhookHandler } from './routes/payments.js';
-import dashboardRoutes from './routes/dashboard.js';
+import studioRoutes from './routes/studio.js';
+import postRoutes from './routes/posts.js';
+import membershipRoutes from './routes/memberships.js';
+import shopRoutes from './routes/shop.js';
+import accountRoutes from './routes/account.js';
 import contactRoutes from './routes/contact.js';
 
 const app = express();
@@ -43,18 +47,22 @@ app.use(async (req, res, next) => {
 
 app.post('/api/payments/webhook', ...webhookHandler);
 
-app.use(express.json({ limit: '200kb' }));
+app.use(express.json({ limit: '600kb' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/pages', pageRoutes);
 app.use('/api/payments', paymentRoutes);
-app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/studio', studioRoutes);
+app.use('/api/posts', postRoutes);
+app.use('/api/memberships', membershipRoutes);
+app.use('/api/shop', shopRoutes);
+app.use('/api/account', accountRoutes);
 app.use('/api/contact', contactRoutes);
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
-  if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Image is too large (max 4MB)' });
+  if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'File is too large (max 4MB)' });
   console.error(err);
   res.status(err.status || 500).json({ error: err.status ? err.message : 'Something went wrong' });
 });

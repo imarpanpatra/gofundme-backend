@@ -3,7 +3,20 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 
 const CATBOX_API = 'https://catbox.moe/user/api.php';
-const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
+const EXT = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'video/webm': '.webm',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'application/pdf': '.pdf',
+  'application/zip': '.zip',
+};
+
+export const baseType = (contentType) => String(contentType || '').split(';')[0].trim().toLowerCase();
+export const isCatboxUrl = (url) => /^https:\/\/files\.catbox\.moe\/[A-Za-z0-9._-]+$/.test(String(url || ''));
 
 function multipartBody(boundary, fields, file) {
   const parts = Object.entries(fields).map(([name, value]) =>
@@ -50,21 +63,25 @@ function post(fields, file, timeoutMs) {
   });
 }
 
-export async function uploadImage({ buffer, contentType, prefix }) {
-  const name = `${prefix}-${randomUUID()}${EXT[contentType] || '.jpg'}`;
+export async function uploadFile({ buffer, contentType, prefix }) {
+  const type = baseType(contentType);
+  const name = `${prefix}-${randomUUID()}${EXT[type] || '.bin'}`;
   const fields = { reqtype: 'fileupload' };
   if (config.catboxUserhash) fields.userhash = config.catboxUserhash;
-  const res = await post(fields, { name, contentType, buffer }, 25000);
+  const res = await post(fields, { name, contentType: type || 'application/octet-stream', buffer }, 25000);
   if (res.status !== 200 || !/^https:\/\/files\.catbox\.moe\//.test(res.text)) {
-    const err = new Error(`Image upload failed (${res.status}): ${res.text.slice(0, 120)}`);
+    const err = new Error(`Upload failed (${res.status}): ${res.text.slice(0, 120)}`);
     err.status = 502;
     throw err;
   }
   return res.text;
 }
 
-export async function deleteImage(url) {
+export async function deleteFile(url) {
   if (!config.catboxUserhash || !/^https:\/\/files\.catbox\.moe\//.test(String(url))) return;
   const file = String(url).split('/').pop();
   await post({ reqtype: 'deletefiles', userhash: config.catboxUserhash, files: file }, null, 15000).catch(() => {});
 }
+
+export const uploadImage = uploadFile;
+export const deleteImage = deleteFile;

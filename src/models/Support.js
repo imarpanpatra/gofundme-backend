@@ -1,14 +1,25 @@
 import mongoose from 'mongoose';
 
+const { ObjectId } = mongoose.Schema.Types;
+
 const supportSchema = new mongoose.Schema(
   {
-    creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    creator: { type: ObjectId, ref: 'User', required: true, index: true },
+    account: { type: ObjectId, index: true },
+    accountKind: { type: String, enum: ['creator', 'supporter'] },
+    type: { type: String, enum: ['tip', 'membership', 'shop'], default: 'tip', index: true },
     name: { type: String, trim: true, maxlength: 60, default: '' },
     message: { type: String, trim: true, maxlength: 1000, default: '' },
     isPrivate: { type: Boolean, default: false },
+    videoUrl: { type: String, default: '' },
     amount: { type: Number, required: true },
     currency: { type: String, default: 'INR' },
     monthly: { type: Boolean, default: false },
+    tier: { type: ObjectId, ref: 'MembershipTier' },
+    tierName: { type: String, default: '' },
+    product: { type: ObjectId, ref: 'Product' },
+    productTitle: { type: String, default: '' },
+    buyerAnswer: { type: String, trim: true, maxlength: 1000, default: '' },
     status: { type: String, enum: ['created', 'paid', 'failed'], default: 'created', index: true },
     razorpayOrderId: { type: String, index: true, sparse: true },
     razorpaySubscriptionId: { type: String, index: true, sparse: true },
@@ -22,11 +33,15 @@ const supportSchema = new mongoose.Schema(
 supportSchema.methods.toPublic = function () {
   return {
     id: this._id,
+    type: this.type || 'tip',
     name: this.name || 'Someone',
     message: this.isPrivate ? '' : this.message,
+    videoUrl: this.isPrivate ? '' : this.videoUrl,
     amount: this.amount / 100,
     currency: this.currency,
     monthly: this.monthly,
+    tierName: this.tierName,
+    productTitle: this.productTitle,
     createdAt: this.paidAt || this.createdAt,
   };
 };

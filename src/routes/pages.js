@@ -1,11 +1,16 @@
 import { Router } from 'express';
 import multer from 'multer';
-import sanitizeHtml from 'sanitize-html';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, optionalViewerId } from '../middleware/auth.js';
+import { leaderboard, supporterList } from '../lib/hallOfFame.js';
 import { config } from '../config.js';
 import { uploadImage, deleteImage } from '../lib/catbox.js';
+import { sanitizeAbout } from '../lib/html.js';
+import { parseYouTubeId } from '../lib/youtube.js';
+import { Post } from '../models/Post.js';
+import { MembershipTier } from '../models/MembershipTier.js';
+import { Product } from '../models/Product.js';
 
 const router = Router();
 
@@ -19,13 +24,27 @@ const upload = multer({
   },
 });
 
-const sanitizeAbout = (html) =>
-  sanitizeHtml(html, {
-    allowedTags: ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'a', 'ul', 'ol', 'li', 'div'],
-    allowedAttributes: { a: ['href', 'target', 'rel'] },
-    allowedSchemes: ['http', 'https', 'mailto'],
-    transformTags: { a: sanitizeHtml.simpleTransform('a', { target: '_blank', rel: 'nofollow noopener' }) },
-  });
+export async function creatorPayload(creator) {
+  const [posts, tiers, products] = await Promise.all([
+    Post.countDocuments({ creator: creator._id, status: 'published' }),
+    creator.membershipEnabled ? MembershipTier.countDocuments({ creator: creator._id, active: true }) : 0,
+    Product.countDocuments({ creator: creator._id, active: true }),
+  ]);
+  return { ...creator.toPublic(), tabs: { posts, membership: tiers > 0, shop: products } };
+}
+
+async function latestPosts(creatorId) {
+  const rows = await Post.find({ creator: creatorId, status: 'published' }).sort({ publishedAt: -1 }).limit(2);
+  return rows.map((p) => ({
+    slug: p.slug,
+    title: p.title,
+    excerpt: p.visibility === 'public' ? p.excerpt : '',
+    cover: p.visibility === 'public' ? p.cover : '',
+    visibility: p.visibility,
+    publishedAt: p.publishedAt,
+    views: p.views,
+  }));
+}
 
 async function supportersPage(creatorId, before) {
   const filter = { creator: creatorId, status: 'paid' };
@@ -38,17 +57,25 @@ async function supportersPage(creatorId, before) {
 router.get('/default', async (req, res) => {
   const creator = await User.findOne({ slug: config.defaultCreator });
   if (!creator) return res.status(404).json({ error: 'Page not found' });
-  res.json({ slug: creator.slug, creator: creator.toPublic() });
+  res.json({ slug: creator.slug, creator: await creatorPayload(creator) });
+});
+
+router.get('/:slug/profile', async (req, res) => {
+  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  if (!creator) return res.status(404).json({ error: 'Page not found' });
+  res.json({ creator: await creatorPayload(creator) });
 });
 
 router.get('/:slug', async (req, res) => {
   const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
   if (!creator) return res.status(404).json({ error: 'Page not found' });
-  const [page, supporterCount] = await Promise.all([
+  const [page, supporterCount, payload, posts] = await Promise.all([
     supportersPage(creator._id),
     Support.countDocuments({ creator: creator._id, status: 'paid' }),
+    creatorPayload(creator),
+    latestPosts(creator._id),
   ]);
-  res.json({ creator: creator.toPublic(), supporterCount, ...page });
+  res.json({ creator: payload, supporterCount, latestPosts: posts, ...page });
 });
 
 router.get('/:slug/supporters', async (req, res) => {
@@ -58,8 +85,22 @@ router.get('/:slug/supporters', async (req, res) => {
   res.json(await supportersPage(creator._id, before));
 });
 
+router.get('/:slug/hall-of-fame', async (req, res) => {
+  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  if (!creator) return res.status(404).json({ error: 'Page not found' });
+  const period = req.query.period === 'month' ? 'month' : 'all';
+  res.json(await leaderboard(creator._id, { period, viewerId: optionalViewerId(req) }));
+});
+
+router.get('/:slug/hall-of-fame/supporters', async (req, res) => {
+  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  if (!creator) return res.status(404).json({ error: 'Page not found' });
+  const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
+  res.json(await supporterList(creator._id, { page, viewerId: optionalViewerId(req) }));
+});
+
 router.put('/me', requireAuth, async (req, res) => {
-  const { name, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact } = req.body || {};
+  const { name, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact, featuredVideo } = req.body || {};
   const user = req.user;
 
   if (name !== undefined) {
@@ -86,6 +127,11 @@ router.put('/me', requireAuth, async (req, res) => {
   }
   if (supportButtonText !== undefined) user.supportButtonText = String(supportButtonText).trim().slice(0, 20) || 'Support';
   if (recurringEnabled !== undefined) user.recurringEnabled = Boolean(recurringEnabled);
+  if (featuredVideo !== undefined) {
+    const id = parseYouTubeId(featuredVideo);
+    if (id === null) return res.status(400).json({ error: 'Enter a valid YouTube link, or leave it empty' });
+    user.featuredVideoId = id;
+  }
   if (contact && typeof contact === 'object') {
     const email = String(contact.email ?? user.contact.email).trim();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid contact email' });
@@ -98,7 +144,7 @@ router.put('/me', requireAuth, async (req, res) => {
   }
 
   await user.save();
-  res.json({ creator: user.toPublic() });
+  res.json({ creator: await creatorPayload(user) });
 });
 
 async function replaceImage(req, res, field) {
@@ -108,7 +154,7 @@ async function replaceImage(req, res, field) {
   req.user[field] = url;
   await req.user.save();
   if (old && old !== url && !(await User.exists({ $or: [{ avatar: old }, { cover: old }] }))) await deleteImage(old);
-  res.json({ creator: req.user.toPublic() });
+  res.json({ creator: await creatorPayload(req.user) });
 }
 
 router.post('/me/cover', requireAuth, upload.single('cover'), (req, res) => replaceImage(req, res, 'cover'));

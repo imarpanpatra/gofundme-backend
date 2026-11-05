@@ -3,86 +3,67 @@ import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
+import multer from 'multer';
 import {
-  getRazorpay,
-  getMonthlyPlan,
   verifyOrderSignature,
   verifySubscriptionSignature,
   verifyWebhookSignature,
 } from '../lib/razorpay.js';
+import { requireAccount } from '../middleware/auth.js';
+import { startCheckout, parseAmount } from '../lib/checkout.js';
+import { onPaid, onSubscriptionStatus } from '../lib/fulfillment.js';
+import { uploadFile, baseType, isCatboxUrl } from '../lib/catbox.js';
 
 const router = Router();
 
 const orderLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
 
-function razorpayError(err) {
-  return err?.error?.description || err?.message || 'Payment gateway error';
-}
+const videoLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false });
 
-router.post('/order', orderLimiter, async (req, res) => {
-  const { slug, amount, name, message, isPrivate, monthly } = req.body || {};
+const VIDEO_TYPES = ['video/webm', 'video/mp4', 'video/quicktime'];
+const videoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, VIDEO_TYPES.includes(baseType(file.mimetype))),
+});
+
+router.post('/video', videoLimiter, requireAccount, videoUpload.single('video'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload a WEBM, MP4 or MOV video up to 4MB' });
+  const url = await uploadFile({ buffer: req.file.buffer, contentType: req.file.mimetype, prefix: 'video' });
+  res.json({ url });
+});
+
+router.post('/order', orderLimiter, requireAccount, async (req, res) => {
+  const { slug, amount, name, message, isPrivate, monthly, videoUrl } = req.body || {};
   const creator = await User.findOne({ slug: String(slug || '').toLowerCase() });
   if (!creator) return res.status(404).json({ error: 'Page not found' });
 
-  const rupees = Number(amount);
-  if (!Number.isFinite(rupees) || rupees < config.minAmount || rupees > config.maxAmount) {
+  const isMonthly = Boolean(monthly) && creator.recurringEnabled;
+  const paise = parseAmount(amount, { wholeOnly: isMonthly });
+  if (paise === null) {
     return res.status(400).json({
       error: `Enter an amount between ₹${config.minAmount} and ₹${config.maxAmount.toLocaleString('en-IN')}`,
     });
   }
-  const isMonthly = Boolean(monthly) && creator.recurringEnabled;
-  const paise = isMonthly ? Math.round(rupees) * 100 : Math.round(rupees * 100);
+  if (videoUrl && !isCatboxUrl(videoUrl)) return res.status(400).json({ error: 'Invalid video message' });
 
   const support = await Support.create({
     creator: creator._id,
+    account: req.actor.id,
+    accountKind: req.actor.kind,
+    type: 'tip',
     name: String(name || '').trim().slice(0, 60),
     message: String(message || '').trim().slice(0, 1000),
     isPrivate: Boolean(isPrivate),
+    videoUrl: videoUrl || '',
     amount: paise,
     currency: config.currency,
     monthly: isMonthly,
   });
 
-  const notes = { creator: creator.slug, supportId: support._id.toString() };
-  const common = {
-    supportId: support._id,
-    keyId: config.razorpay.keyId,
-    amount: paise,
-    currency: config.currency,
-    creator: { name: creator.name, avatar: creator.avatar, themeColor: creator.themeColor },
-  };
-
-  try {
-    if (isMonthly) {
-      const planId = await getMonthlyPlan(paise, config.currency);
-      const subscription = await getRazorpay().subscriptions.create({
-        plan_id: planId,
-        total_count: 120,
-        quantity: 1,
-        customer_notify: 1,
-        notes,
-      });
-      support.razorpaySubscriptionId = subscription.id;
-      support.subscriptionStatus = subscription.status;
-      await support.save();
-      return res.json({ ...common, mode: 'subscription', subscriptionId: subscription.id });
-    }
-
-    const order = await getRazorpay().orders.create({
-      amount: paise,
-      currency: config.currency,
-      receipt: support._id.toString(),
-      notes,
-    });
-    support.razorpayOrderId = order.id;
-    await support.save();
-    res.json({ ...common, mode: 'order', orderId: order.id });
-  } catch (err) {
-    support.status = 'failed';
-    await support.save();
-    console.error('Razorpay create failed:', err);
-    res.status(502).json({ error: razorpayError(err) });
-  }
+  const result = await startCheckout({ support, creator, actor: req.actor });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.json(result.body);
 });
 
 router.post('/verify', async (req, res) => {
@@ -112,6 +93,7 @@ router.post('/verify', async (req, res) => {
     support.paidAt = new Date();
     if (subscriptionId) support.subscriptionStatus = 'active';
     await support.save();
+    await onPaid(support);
   }
   res.json({ support: support.toPublic() });
 });
@@ -123,6 +105,7 @@ async function markOrderPaid(payment) {
   support.razorpayPaymentId = payment.id;
   support.paidAt = new Date((payment.created_at || Date.now() / 1000) * 1000);
   await support.save();
+  await onPaid(support);
 }
 
 async function markOrderFailed(payment) {
@@ -141,10 +124,16 @@ async function recordSubscriptionCharge(subscription, payment) {
     head.paidAt = paidAt;
     head.subscriptionStatus = subscription.status;
     await head.save();
+    await onPaid(head);
     return;
   }
-  await Support.create({
+  const charge = await Support.create({
     creator: head.creator,
+    account: head.account,
+    accountKind: head.accountKind,
+    type: head.type,
+    tier: head.tier,
+    tierName: head.tierName,
     name: head.name,
     message: '',
     isPrivate: head.isPrivate,
@@ -157,6 +146,7 @@ async function recordSubscriptionCharge(subscription, payment) {
     subscriptionStatus: subscription.status,
     paidAt,
   });
+  await onPaid(charge, { firstCharge: false });
 }
 
 export const webhookHandler = [
@@ -199,6 +189,7 @@ export const webhookHandler = [
         case 'subscription.activated':
           if (subscription) {
             await Support.updateMany({ razorpaySubscriptionId: subscription.id }, { subscriptionStatus: subscription.status });
+            await onSubscriptionStatus(subscription.id, subscription.status);
           }
           break;
         default:
