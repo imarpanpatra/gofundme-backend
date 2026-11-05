@@ -1,6 +1,11 @@
 import app from './app.js';
-import { config } from './config.js';
+import { config, missingEnv } from './config.js';
 import { connectDb } from './db.js';
+
+if (missingEnv.length) {
+  console.error(`Missing env vars: ${missingEnv.join(', ')}. Copy .env.example to .env and fill them in.`);
+  process.exit(1);
+}
 
 connectDb()
   .then(() => {

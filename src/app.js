@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { config } from './config.js';
+import { config, missingEnv } from './config.js';
 import { connectDb } from './db.js';
 import authRoutes from './routes/auth.js';
 import pageRoutes from './routes/pages.js';
@@ -20,7 +20,16 @@ app.use(
 );
 
 app.get('/', (req, res) => res.json({ ok: true, service: 'gofundme-api' }));
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/health', (req, res) => {
+  if (missingEnv.length) return res.status(500).json({ ok: false, missingEnv });
+  res.json({ ok: true });
+});
+
+app.use((req, res, next) => {
+  if (!missingEnv.length) return next();
+  console.error(`Missing env vars: ${missingEnv.join(', ')}`);
+  res.status(500).json({ error: `Server is missing configuration: ${missingEnv.join(', ')}` });
+});
 
 app.use(async (req, res, next) => {
   try {

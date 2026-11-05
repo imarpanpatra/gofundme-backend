@@ -32,6 +32,11 @@ if (!email || !password) {
   process.exit(1);
 }
 
+if (!config.mongoUri) {
+  console.error('Set MONGO_URI in .env or the environment');
+  process.exit(1);
+}
+
 await mongoose.connect(config.mongoUri);
 
 const login = { email, passwordHash: await bcrypt.hash(password, 12) };

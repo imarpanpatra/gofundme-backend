@@ -3,10 +3,12 @@ import Razorpay from 'razorpay';
 import { config } from '../config.js';
 import { Plan } from '../models/Plan.js';
 
-export const razorpay = new Razorpay({
-  key_id: config.razorpay.keyId,
-  key_secret: config.razorpay.keySecret,
-});
+let client;
+
+export function getRazorpay() {
+  if (!client) client = new Razorpay({ key_id: config.razorpay.keyId, key_secret: config.razorpay.keySecret });
+  return client;
+}
 
 function hmac(payload, secret) {
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
@@ -34,7 +36,7 @@ export function verifyWebhookSignature(rawBody, signature) {
 export async function getMonthlyPlan(amount, currency) {
   const existing = await Plan.findOne({ amount, currency });
   if (existing) return existing.razorpayPlanId;
-  const plan = await razorpay.plans.create({
+  const plan = await getRazorpay().plans.create({
     period: 'monthly',
     interval: 1,
     item: { name: `Monthly support ${currency} ${amount / 100}`, amount, currency },

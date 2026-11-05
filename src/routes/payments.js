@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
 import {
-  razorpay,
+  getRazorpay,
   getMonthlyPlan,
   verifyOrderSignature,
   verifySubscriptionSignature,
@@ -55,7 +55,7 @@ router.post('/order', orderLimiter, async (req, res) => {
   try {
     if (isMonthly) {
       const planId = await getMonthlyPlan(paise, config.currency);
-      const subscription = await razorpay.subscriptions.create({
+      const subscription = await getRazorpay().subscriptions.create({
         plan_id: planId,
         total_count: 120,
         quantity: 1,
@@ -68,7 +68,7 @@ router.post('/order', orderLimiter, async (req, res) => {
       return res.json({ ...common, mode: 'subscription', subscriptionId: subscription.id });
     }
 
-    const order = await razorpay.orders.create({
+    const order = await getRazorpay().orders.create({
       amount: paise,
       currency: config.currency,
       receipt: support._id.toString(),

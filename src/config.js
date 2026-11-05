@@ -1,10 +1,7 @@
 import 'dotenv/config';
 
 const required = ['MONGO_URI', 'JWT_SECRET', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET'];
-const missing = required.filter((k) => !process.env[k]);
-if (missing.length) {
-  throw new Error(`Missing env vars: ${missing.join(', ')}. Set them in server/.env locally or in the Vercel project settings.`);
-}
+export const missingEnv = required.filter((k) => !process.env[k]?.trim());
 
 export const config = {
   port: Number(process.env.PORT) || 5050,
