@@ -12,9 +12,9 @@ export const config = {
     .filter(Boolean),
   jwtSecret: process.env.JWT_SECRET,
   razorpay: {
-    keyId: process.env.RAZORPAY_KEY_ID,
-    keySecret: process.env.RAZORPAY_KEY_SECRET,
-    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
+    keyId: process.env.RAZORPAY_KEY_ID?.trim(),
+    keySecret: process.env.RAZORPAY_KEY_SECRET?.trim(),
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET?.trim() || '',
   },
   catboxUserhash: process.env.CATBOX_USERHASH || '',
   defaultCreator: process.env.DEFAULT_CREATOR || 'arpanpatra',
