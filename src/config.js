@@ -19,6 +19,6 @@ export const config = {
   catboxUserhash: process.env.CATBOX_USERHASH || '',
   defaultCreator: process.env.DEFAULT_CREATOR || 'arpanpatra',
   currency: 'INR',
-  minAmount: 1,
+  minAmount: 11,
   maxAmount: 500000,
 };

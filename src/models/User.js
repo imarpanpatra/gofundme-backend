@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 60 },
+    siteName: { type: String, trim: true, default: '' },
+    mention: { type: String, trim: true, default: '' },
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
@@ -17,6 +19,11 @@ const userSchema = new mongoose.Schema(
     recurringEnabled: { type: Boolean, default: true },
     featuredVideoId: { type: String, default: '' },
     membershipEnabled: { type: Boolean, default: false },
+    goal: {
+      amount: { type: Number, default: 0 },
+      title: { type: String, trim: true, default: '' },
+      raisingFor: { type: String, trim: true, default: '' },
+    },
     contact: {
       legalName: { type: String, trim: true, default: '' },
       email: { type: String, trim: true, default: '' },
@@ -30,6 +37,8 @@ const userSchema = new mongoose.Schema(
 userSchema.methods.toPublic = function () {
   return {
     name: this.name,
+    siteName: this.siteName || '',
+    mention: this.mention || '',
     slug: this.slug,
     avatar: this.avatar,
     cover: this.cover,
@@ -42,6 +51,11 @@ userSchema.methods.toPublic = function () {
     recurringEnabled: this.recurringEnabled,
     featuredVideoId: this.featuredVideoId || '',
     membershipEnabled: Boolean(this.membershipEnabled),
+    goal: {
+      amount: this.goal?.amount || 0,
+      title: this.goal?.title || '',
+      raisingFor: this.goal?.raisingFor || '',
+    },
     contact: {
       legalName: this.contact?.legalName || this.name,
       email: this.contact?.email || '',

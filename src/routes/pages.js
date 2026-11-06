@@ -46,6 +46,14 @@ async function latestPosts(creatorId) {
   }));
 }
 
+async function totalRaised(creatorId) {
+  const [row] = await Support.aggregate([
+    { $match: { creator: creatorId, status: 'paid' } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  return (row?.total || 0) / 100;
+}
+
 async function supportersPage(creatorId, before) {
   const filter = { creator: creatorId, status: 'paid' };
   if (before) filter.paidAt = { $lt: new Date(before) };
@@ -69,13 +77,14 @@ router.get('/:slug/profile', async (req, res) => {
 router.get('/:slug', async (req, res) => {
   const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
   if (!creator) return res.status(404).json({ error: 'Page not found' });
-  const [page, supporterCount, payload, posts] = await Promise.all([
+  const [page, supporterCount, payload, posts, raised] = await Promise.all([
     supportersPage(creator._id),
     Support.countDocuments({ creator: creator._id, status: 'paid' }),
     creatorPayload(creator),
     latestPosts(creator._id),
+    totalRaised(creator._id),
   ]);
-  res.json({ creator: payload, supporterCount, latestPosts: posts, ...page });
+  res.json({ creator: payload, supporterCount, raised, latestPosts: posts, ...page });
 });
 
 router.get('/:slug/supporters', async (req, res) => {
@@ -100,7 +109,7 @@ router.get('/:slug/hall-of-fame/supporters', async (req, res) => {
 });
 
 router.put('/me', requireAuth, async (req, res) => {
-  const { name, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact, featuredVideo } = req.body || {};
+  const { name, siteName, mention, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact, featuredVideo, goal } = req.body || {};
   const user = req.user;
 
   if (name !== undefined) {
@@ -108,6 +117,8 @@ router.put('/me', requireAuth, async (req, res) => {
     if (!v) return res.status(400).json({ error: 'Name is required' });
     user.name = v.slice(0, 60);
   }
+  if (siteName !== undefined) user.siteName = String(siteName).trim().slice(0, 40);
+  if (mention !== undefined) user.mention = String(mention).trim().slice(0, 60);
   if (about !== undefined) user.about = sanitizeAbout(String(about)).slice(0, 20000);
   if (Array.isArray(links)) {
     user.links = links
@@ -131,6 +142,17 @@ router.put('/me', requireAuth, async (req, res) => {
     const id = parseYouTubeId(featuredVideo);
     if (id === null) return res.status(400).json({ error: 'Enter a valid YouTube link, or leave it empty' });
     user.featuredVideoId = id;
+  }
+  if (goal && typeof goal === 'object') {
+    const amount = goal.amount === '' || goal.amount == null ? 0 : Number(goal.amount);
+    if (!Number.isInteger(amount) || amount < 0 || amount > 100000000) {
+      return res.status(400).json({ error: 'Enter the target as a whole number of rupees, up to ₹10,00,00,000' });
+    }
+    user.goal = {
+      amount,
+      title: String(goal.title ?? user.goal?.title ?? '').trim().slice(0, 80),
+      raisingFor: String(goal.raisingFor ?? user.goal?.raisingFor ?? '').trim().slice(0, 120),
+    };
   }
   if (contact && typeof contact === 'object') {
     const email = String(contact.email ?? user.contact.email).trim();
