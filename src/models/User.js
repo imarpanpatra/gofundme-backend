@@ -8,6 +8,7 @@ const userSchema = new mongoose.Schema(
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
+    googleId: { type: String, index: true, sparse: true },
     avatar: { type: String, default: '' },
     cover: { type: String, default: '' },
     about: { type: String, default: '' },

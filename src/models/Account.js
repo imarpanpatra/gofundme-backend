@@ -4,7 +4,8 @@ const accountSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 60 },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    passwordHash: { type: String, required: true },
+    passwordHash: { type: String, default: '' },
+    googleId: { type: String, index: true, sparse: true },
   },
   { timestamps: true }
 );

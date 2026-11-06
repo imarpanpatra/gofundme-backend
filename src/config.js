@@ -16,6 +16,7 @@ export const config = {
     keySecret: process.env.RAZORPAY_KEY_SECRET?.trim(),
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET?.trim() || '',
   },
+  googleClientId: (process.env.GOOGLE_CLIENT_ID || '1934199762-jh82prahuornnf1m98tvr2jgt77fm3uk.apps.googleusercontent.com').trim(),
   catboxUserhash: process.env.CATBOX_USERHASH || '',
   defaultCreator: process.env.DEFAULT_CREATOR || 'arpanpatra',
   currency: 'INR',

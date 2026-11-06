@@ -10,7 +10,7 @@ import { startCheckout } from '../lib/checkout.js';
 
 const router = Router();
 
-const buyLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const buyLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 async function findCreator(req, res) {
   const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });

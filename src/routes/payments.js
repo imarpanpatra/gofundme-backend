@@ -16,9 +16,9 @@ import { uploadFile, baseType, isCatboxUrl } from '../lib/catbox.js';
 
 const router = Router();
 
-const orderLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const orderLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
-const videoLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false });
+const videoLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 const VIDEO_TYPES = ['video/webm', 'video/mp4', 'video/quicktime'];
 const videoUpload = multer({

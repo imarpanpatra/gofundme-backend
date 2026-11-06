@@ -11,7 +11,7 @@ import { startCheckout } from '../lib/checkout.js';
 
 const router = Router();
 
-const joinLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
+const joinLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 router.get('/:slug', async (req, res) => {
   const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });

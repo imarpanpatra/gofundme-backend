@@ -4,11 +4,13 @@ import rateLimit from 'express-rate-limit';
 import { User } from '../models/User.js';
 import { Account } from '../models/Account.js';
 import { requireAccount, signToken } from '../middleware/auth.js';
+import { verifyGoogleCredential } from '../lib/google.js';
 
 const router = Router();
 
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
-const signupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const googleLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const signupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -39,12 +41,42 @@ router.post('/login', loginLimiter, async (req, res) => {
 
   const user = await User.findOne({ email: normalized });
   if (user) {
-    if (!(await bcrypt.compare(String(password), user.passwordHash))) return res.status(401).json({ error: 'Invalid email or password' });
+    if (!user.passwordHash || !(await bcrypt.compare(String(password), user.passwordHash))) return res.status(401).json({ error: 'Invalid email or password' });
     return res.json({ token: signToken(user, 'creator'), user: creatorPayload(user) });
   }
   const account = await Account.findOne({ email: normalized });
+  if (account && !account.passwordHash) {
+    return res.status(401).json({ error: 'This account uses Google sign-in. Use "Continue with Google" instead.' });
+  }
   if (!account || !(await bcrypt.compare(String(password), account.passwordHash))) {
     return res.status(401).json({ error: 'Invalid email or password' });
+  }
+  res.json({ token: signToken(account, 'supporter'), user: account.toPublic() });
+});
+
+router.post('/google', googleLimiter, async (req, res) => {
+  let profile;
+  try {
+    profile = await verifyGoogleCredential(req.body?.credential);
+  } catch (err) {
+    return res.status(err.status || 502).json({ error: err.message });
+  }
+  const { googleId, email, name } = profile;
+
+  const user = await User.findOne({ email });
+  if (user) {
+    if (!user.googleId) await User.updateOne({ _id: user._id }, { googleId });
+    return res.json({ token: signToken(user, 'creator'), user: creatorPayload(user) });
+  }
+
+  let account = await Account.findOne({ email });
+  if (account) {
+    if (!account.googleId) await Account.updateOne({ _id: account._id }, { googleId });
+  } else {
+    account = await Account.create({ name: name || email, email, googleId }).catch(async (err) => {
+      if (err.code === 11000) return Account.findOne({ email });
+      throw err;
+    });
   }
   res.json({ token: signToken(account, 'supporter'), user: account.toPublic() });
 });

@@ -7,7 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-const contactLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
+const contactLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 router.post('/', contactLimiter, async (req, res) => {
   const { name, email, subject, message } = req.body || {};

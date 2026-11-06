@@ -10,7 +10,7 @@ import { canViewPost } from '../lib/access.js';
 const router = Router();
 
 const PAGE_SIZE = 12;
-const commentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
+const commentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
 
 async function findCreator(req, res) {
   const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });
