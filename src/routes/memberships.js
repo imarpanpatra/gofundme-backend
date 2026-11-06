@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import rateLimit from 'express-rate-limit';
+import { limiter } from '../lib/limiter.js';
 import { config } from '../config.js';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
@@ -8,13 +8,14 @@ import { MembershipTier } from '../models/MembershipTier.js';
 import { Membership } from '../models/Membership.js';
 import { requireAccount, optionalActor } from '../middleware/auth.js';
 import { startCheckout } from '../lib/checkout.js';
+import { getRazorpay } from '../lib/razorpay.js';
 
 const router = Router();
 
-const joinLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const joinLimiter = limiter('joinLimiter', 10 * 60 * 1000, 20);
 
 router.get('/:slug', async (req, res) => {
-  const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   if (!creator.membershipEnabled) return res.json({ enabled: false, tiers: [], membership: null });
   const actor = await optionalActor(req);
@@ -39,7 +40,7 @@ router.get('/:slug', async (req, res) => {
 });
 
 router.post('/:slug/tiers/:tierId/join', joinLimiter, requireAccount, async (req, res) => {
-  const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator || !creator.membershipEnabled) return res.status(404).json({ error: 'Memberships are not available' });
   if (!mongoose.isValidObjectId(req.params.tierId)) return res.status(404).json({ error: 'Tier not found' });
   const tier = await MembershipTier.findOne({ _id: req.params.tierId, creator: creator._id, active: true });
@@ -49,6 +50,30 @@ router.post('/:slug/tiers/:tierId/join', joinLimiter, requireAccount, async (req
   }
 
   const amount = Math.round(tier.price) * 100;
+  const pending = await Membership.findOne({
+    creator: creator._id,
+    account: req.actor.id,
+    status: 'created',
+    createdAt: { $gt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+  }).sort({ createdAt: -1 });
+  if (pending && String(pending.tier) === String(tier._id) && pending.razorpaySubscriptionId) {
+    return res.json({
+      supportId: (await Support.findOne({ razorpaySubscriptionId: pending.razorpaySubscriptionId }, { _id: 1 }).sort({ createdAt: 1 }))?._id,
+      keyId: config.razorpay.keyId,
+      prefill: { name: req.actor.name, email: req.actor.email },
+      amount,
+      currency: config.currency,
+      creator: { name: creator.name, avatar: creator.avatar, themeColor: creator.themeColor },
+      mode: 'subscription',
+      subscriptionId: pending.razorpaySubscriptionId,
+      tierName: tier.name,
+    });
+  }
+  if (pending?.razorpaySubscriptionId) {
+    await getRazorpay().subscriptions.cancel(pending.razorpaySubscriptionId).catch(() => {});
+    await Membership.updateOne({ _id: pending._id, status: 'created' }, { $set: { status: 'cancelled', endedAt: new Date() } });
+  }
+
   const support = await Support.create({
     creator: creator._id,
     account: req.actor.id,

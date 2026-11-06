@@ -53,6 +53,7 @@ function post(fields, file, timeoutMs) {
       },
       (res) => {
         let data = '';
+        res.on('error', (e) => reject(new Error(`catbox response failed: ${e.code || e.message}`)));
         res.on('data', (c) => (data += c));
         res.on('end', () => resolve({ status: res.statusCode, text: data.trim() }));
       }

@@ -1,4 +1,5 @@
 import { Support } from '../models/Support.js';
+import { usernamesFor } from './profiles.js';
 
 const IST_OFFSET_MS = 330 * 60 * 1000;
 
@@ -48,8 +49,9 @@ function people(creatorId, since) {
   ];
 }
 
-const shape = (row, viewerId, rank) => ({
+const shape = (row, viewerId, rank, usernames) => ({
   ...(rank ? { rank } : {}),
+  username: usernames?.get(String(row._id)) || '',
   name: row.name || 'Anonymous supporter',
   total: row.total / 100,
   count: row.count,
@@ -71,11 +73,12 @@ export async function leaderboard(creatorId, { period = 'all', viewerId, limit =
     },
   ]);
   const stats = result.stats[0] || { supporters: 0, supports: 0, raised: 0 };
+  const usernames = await usernamesFor(result.top.map((r) => r._id));
   return {
     period,
     since,
     stats: { supporters: stats.supporters, supports: stats.supports, raised: stats.raised / 100 },
-    leaderboard: result.top.map((row, i) => shape(row, viewerId, i + 1)),
+    leaderboard: result.top.map((row, i) => shape(row, viewerId, i + 1, usernames)),
   };
 }
 
@@ -90,8 +93,9 @@ export async function supporterList(creatorId, { page = 1, pageSize = 20, viewer
     },
   ]);
   const total = result.count[0]?.n || 0;
+  const usernames = await usernamesFor(result.rows.map((r) => r._id));
   return {
-    supporters: result.rows.map((row) => shape(row, viewerId)),
+    supporters: result.rows.map((row) => shape(row, viewerId, undefined, usernames)),
     page,
     pages: Math.max(1, Math.ceil(total / pageSize)),
     total,

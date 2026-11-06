@@ -1,24 +1,28 @@
 import express, { Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import { limiter } from '../lib/limiter.js';
 import { config } from '../config.js';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
+import { Moment } from '../models/Moment.js';
+import { momentStats } from '../lib/moments.js';
+import mongoose from 'mongoose';
 import multer from 'multer';
 import {
+  getRazorpay,
   verifyOrderSignature,
   verifySubscriptionSignature,
   verifyWebhookSignature,
 } from '../lib/razorpay.js';
 import { requireAccount } from '../middleware/auth.js';
 import { startCheckout, parseAmount } from '../lib/checkout.js';
-import { onPaid, onSubscriptionStatus } from '../lib/fulfillment.js';
+import { onPaid, onRefunded, onSubscriptionStatus } from '../lib/fulfillment.js';
 import { uploadFile, baseType, isCatboxUrl } from '../lib/catbox.js';
 
 const router = Router();
 
-const orderLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const orderLimiter = limiter('orderLimiter', 10 * 60 * 1000, 30);
 
-const videoLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 15, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const videoLimiter = limiter('videoLimiter', 60 * 60 * 1000, 15);
 
 const VIDEO_TYPES = ['video/webm', 'video/mp4', 'video/quicktime'];
 const videoUpload = multer({
@@ -34,16 +38,33 @@ router.post('/video', videoLimiter, requireAccount, videoUpload.single('video'),
 });
 
 router.post('/order', orderLimiter, requireAccount, async (req, res) => {
-  const { slug, amount, name, message, isPrivate, monthly, videoUrl } = req.body || {};
-  const creator = await User.findOne({ slug: String(slug || '').toLowerCase() });
+  const { slug, amount, name, message, isPrivate, monthly, videoUrl, momentId } = req.body || {};
+  const creator = await User.findBySlug(slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
 
-  const isMonthly = Boolean(monthly) && creator.recurringEnabled;
-  const paise = parseAmount(amount, { wholeOnly: isMonthly });
+  let moment = null;
+  let remaining = 0;
+  if (momentId) {
+    if (!mongoose.isValidObjectId(momentId)) return res.status(404).json({ error: 'This moment no longer exists' });
+    moment = await Moment.findOne({ _id: momentId, creator: creator._id, active: true });
+    if (!moment || moment.cost <= 0) return res.status(404).json({ error: 'This moment no longer exists' });
+    const stats = (await momentStats(creator._id, [moment._id])).get(String(moment._id));
+    remaining = Math.ceil(moment.cost - (stats?.raised || 0));
+    if (remaining <= 0) return res.status(409).json({ error: 'This moment is already fully sponsored. Thank you!' });
+  }
+
+  const isMonthly = Boolean(monthly) && creator.recurringEnabled && !moment;
+  const exactRest = moment && remaining < config.minAmount && Number(amount) === remaining;
+  const paise = exactRest ? remaining * 100 : parseAmount(amount, { wholeOnly: isMonthly });
   if (paise === null) {
     return res.status(400).json({
-      error: `Enter an amount between ₹${config.minAmount} and ₹${config.maxAmount.toLocaleString('en-IN')}`,
+      error: moment && remaining < config.minAmount
+        ? `Only ₹${remaining} is left on this moment`
+        : `Enter an amount between ₹${config.minAmount} and ₹${config.maxAmount.toLocaleString('en-IN')}`,
     });
+  }
+  if (moment && paise > remaining * 100) {
+    return res.status(400).json({ error: `Only ₹${remaining.toLocaleString('en-IN')} is left on this moment` });
   }
   if (videoUrl && !isCatboxUrl(videoUrl)) return res.status(400).json({ error: 'Invalid video message' });
 
@@ -59,11 +80,19 @@ router.post('/order', orderLimiter, requireAccount, async (req, res) => {
     amount: paise,
     currency: config.currency,
     monthly: isMonthly,
+    ...(moment ? { moment: moment._id, momentTitle: moment.title } : {}),
   });
 
-  const result = await startCheckout({ support, creator, actor: req.actor });
+  const result = await startCheckout({ support, creator, actor: req.actor, extraNotes: moment ? { moment: moment.title.slice(0, 200) } : {} });
   if (!result.ok) return res.status(result.status).json({ error: result.error });
   res.json(result.body);
+});
+
+router.get('/status/:supportId', requireAccount, async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.supportId)) return res.status(404).json({ error: 'Payment not found' });
+  const support = await Support.findOne({ _id: req.params.supportId, account: req.actor.id });
+  if (!support) return res.status(404).json({ error: 'Payment not found' });
+  res.json({ status: support.status, support: support.status === 'paid' ? support.toPublic() : null });
 });
 
 router.post('/verify', async (req, res) => {
@@ -77,9 +106,9 @@ router.post('/verify', async (req, res) => {
     return res.status(400).json({ error: 'Missing payment details' });
   }
 
-  const support = orderId
-    ? await Support.findOne({ razorpayOrderId: orderId })
-    : await Support.findOne({ razorpaySubscriptionId: subscriptionId }).sort({ createdAt: 1 });
+  let support = orderId
+    ? await Support.findOne({ razorpayOrderId: String(orderId) })
+    : await Support.findOne({ razorpaySubscriptionId: String(subscriptionId) }).sort({ createdAt: 1 });
   if (!support) return res.status(404).json({ error: 'Payment not found' });
 
   const valid = orderId
@@ -88,24 +117,62 @@ router.post('/verify', async (req, res) => {
   if (!valid) return res.status(400).json({ error: 'Payment verification failed' });
 
   if (support.status !== 'paid') {
-    support.status = 'paid';
-    support.razorpayPaymentId = paymentId;
-    support.paidAt = new Date();
-    if (subscriptionId) support.subscriptionStatus = 'active';
-    await support.save();
-    await onPaid(support);
+    const claimed = await claimPaid(support._id, {
+      razorpayPaymentId: String(paymentId),
+      paidAt: new Date(),
+      ...(subscriptionId ? { subscriptionStatus: 'active' } : {}),
+    });
+    if (claimed) await onPaid(claimed);
+    support = claimed || (await Support.findById(support._id));
   }
   res.json({ support: support.toPublic() });
 });
 
+async function claimPaid(supportId, fields) {
+  try {
+    return await Support.findOneAndUpdate({ _id: supportId, status: { $ne: 'paid' } }, { $set: { status: 'paid', ...fields } }, { new: true });
+  } catch (err) {
+    if (err?.code === 11000) return null;
+    throw err;
+  }
+}
+
 async function markOrderPaid(payment) {
-  const support = await Support.findOne({ razorpayOrderId: payment.order_id });
+  const support = await Support.findOne({ razorpayOrderId: payment.order_id }, { _id: 1, status: 1 });
   if (!support || support.status === 'paid') return;
-  support.status = 'paid';
-  support.razorpayPaymentId = payment.id;
-  support.paidAt = new Date((payment.created_at || Date.now() / 1000) * 1000);
-  await support.save();
-  await onPaid(support);
+  const claimed = await claimPaid(support._id, {
+    razorpayPaymentId: payment.id,
+    paidAt: new Date((payment.created_at || Date.now() / 1000) * 1000),
+  });
+  if (claimed) await onPaid(claimed);
+}
+
+async function recordRefund(paymentId, refundedPaise) {
+  const refunded = Math.round(Number(refundedPaise) || 0);
+  if (!paymentId || refunded <= 0) return;
+  const support = await Support.findOne({ razorpayPaymentId: paymentId, status: 'paid' });
+  if (!support) return;
+  const original = support.originalAmount ?? support.amount;
+  if (refunded >= original) {
+    const done = await Support.findOneAndUpdate(
+      { _id: support._id, status: 'paid' },
+      { $set: { status: 'refunded', originalAmount: original, amountRefunded: original, amount: 0 } },
+      { new: true }
+    );
+    if (done) await onRefunded(done);
+    return;
+  }
+  await Support.updateOne(
+    { _id: support._id, status: 'paid', amountRefunded: { $ne: refunded } },
+    { $set: { originalAmount: original, amountRefunded: refunded, amount: original - refunded } }
+  );
+}
+
+async function refundedTotal(refund, payment) {
+  if (payment?.id && payment.amount_refunded != null) return { id: payment.id, refunded: payment.amount_refunded };
+  if (!refund?.payment_id) return null;
+  const fetched = await getRazorpay().payments.fetch(refund.payment_id);
+  return { id: fetched.id, refunded: fetched.amount_refunded };
 }
 
 async function markOrderFailed(payment) {
@@ -119,13 +186,9 @@ async function recordSubscriptionCharge(subscription, payment) {
 
   const paidAt = new Date((payment.created_at || Date.now() / 1000) * 1000);
   if (head.status !== 'paid') {
-    head.status = 'paid';
-    head.razorpayPaymentId = payment.id;
-    head.paidAt = paidAt;
-    head.subscriptionStatus = subscription.status;
-    await head.save();
-    await onPaid(head);
-    return;
+    const claimed = await claimPaid(head._id, { razorpayPaymentId: payment.id, paidAt, subscriptionStatus: subscription.status });
+    if (claimed) await onPaid(claimed);
+    if (claimed || (await Support.exists({ razorpayPaymentId: payment.id }))) return;
   }
   const charge = await Support.create({
     creator: head.creator,
@@ -145,8 +208,11 @@ async function recordSubscriptionCharge(subscription, payment) {
     razorpayPaymentId: payment.id,
     subscriptionStatus: subscription.status,
     paidAt,
+  }).catch((err) => {
+    if (err?.code === 11000) return null;
+    throw err;
   });
-  await onPaid(charge, { firstCharge: false });
+  if (charge) await onPaid(charge, { firstCharge: false });
 }
 
 export const webhookHandler = [
@@ -177,6 +243,14 @@ export const webhookHandler = [
           break;
         case 'payment.failed':
           if (payment?.order_id) await markOrderFailed(payment);
+          break;
+        case 'refund.processed': {
+          const total = await refundedTotal(event.payload?.refund?.entity, payment);
+          if (total) await recordRefund(total.id, total.refunded);
+          break;
+        }
+        case 'payment.dispute.lost':
+          if (payment?.id) await recordRefund(payment.id, payment.amount);
           break;
         case 'subscription.charged':
           if (subscription && payment) await recordSubscriptionCharge(subscription, payment);

@@ -4,13 +4,20 @@ import { Membership } from '../models/Membership.js';
 export async function onPaid(support, { firstCharge = true } = {}) {
   if (support.type === 'shop' && support.product && firstCharge) {
     await Product.updateOne({ _id: support.product }, { $inc: { sold: 1 } });
-    await Product.updateOne({ _id: support.product, stock: { $gt: 0 } }, { $inc: { stock: -1 } });
+    if (!support.stockReserved) await Product.updateOne({ _id: support.product, stock: { $gt: 0 } }, { $inc: { stock: -1 } });
   }
   if (support.type === 'membership' && support.razorpaySubscriptionId) {
     await Membership.updateOne(
       { razorpaySubscriptionId: support.razorpaySubscriptionId, status: { $in: ['created', 'halted', 'paused'] } },
       { $set: { status: 'active' }, $min: { startedAt: support.paidAt || new Date() } }
     );
+  }
+}
+
+export async function onRefunded(support) {
+  if (support.type === 'shop' && support.product) {
+    await Product.updateOne({ _id: support.product, sold: { $gt: 0 } }, { $inc: { sold: -1 } });
+    await Product.updateOne({ _id: support.product, stock: { $ne: null } }, { $inc: { stock: 1 } });
   }
 }
 

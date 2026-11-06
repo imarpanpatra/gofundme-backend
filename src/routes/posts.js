@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import rateLimit from 'express-rate-limit';
+import { limiter } from '../lib/limiter.js';
 import { User } from '../models/User.js';
 import { Post } from '../models/Post.js';
 import { Comment } from '../models/Comment.js';
@@ -10,10 +10,10 @@ import { canViewPost } from '../lib/access.js';
 const router = Router();
 
 const PAGE_SIZE = 12;
-const commentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const commentLimiter = limiter('commentLimiter', 10 * 60 * 1000, 20);
 
 async function findCreator(req, res) {
-  const creator = await User.findOne({ slug: String(req.params.slug).toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) res.status(404).json({ error: 'Page not found' });
   return creator;
 }
@@ -71,13 +71,14 @@ router.get('/:slug/:postSlug', async (req, res) => {
   const actor = await optionalActor(req);
   const unlocked = await canViewPost(post, actor);
   const isOwner = actor?.kind === 'creator' && String(actor.id) === String(creator._id);
-  if (!isOwner) await Post.updateOne({ _id: post._id }, { $inc: { views: 1 } });
+  const prerender = req.get('x-gfm-prerender') === '1';
+  if (!isOwner && !prerender) await Post.updateOne({ _id: post._id }, { $inc: { views: 1 } });
 
   res.json({
     post: {
       ...card(post, unlocked),
       html: unlocked ? post.html : '',
-      views: post.views + (isOwner ? 0 : 1),
+      views: post.views + (isOwner || prerender ? 0 : 1),
       likeCount: post.likes.length,
       liked: Boolean(actor && post.likes.some((id) => String(id) === String(actor.id))),
       commentCount: post.commentCount,
@@ -153,7 +154,9 @@ router.delete('/:slug/:postSlug/comments/:commentId', requireAccount, async (req
   const creator = await findCreator(req, res);
   if (!creator) return;
   if (!mongoose.isValidObjectId(req.params.commentId)) return res.status(404).json({ error: 'Comment not found' });
-  const comment = await Comment.findById(req.params.commentId);
+  const post = await findPost(req, res, creator);
+  if (!post) return;
+  const comment = await Comment.findOne({ _id: req.params.commentId, post: post._id });
   if (!comment) return res.status(404).json({ error: 'Comment not found' });
   const isOwner = req.actor.kind === 'creator' && String(req.actor.id) === String(creator._id);
   if (!isOwner && String(comment.actor) !== String(req.actor.id)) return res.status(403).json({ error: 'You can only delete your own comments' });

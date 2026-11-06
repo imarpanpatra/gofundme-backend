@@ -33,9 +33,21 @@ export function verifyWebhookSignature(rawBody, signature) {
   return safeEqual(hmac(rawBody, config.razorpay.webhookSecret), signature);
 }
 
-export async function getMonthlyPlan(amount, currency) {
+const DAY = 24 * 60 * 60 * 1000;
+
+export async function getMonthlyPlan(amount, currency, createdBy) {
   const existing = await Plan.findOne({ amount, currency });
   if (existing) return existing.razorpayPlanId;
+  const since = new Date(Date.now() - DAY);
+  const [mine, all] = await Promise.all([
+    createdBy ? Plan.countDocuments({ createdBy, createdAt: { $gt: since } }) : 0,
+    Plan.countDocuments({ createdAt: { $gt: since } }),
+  ]);
+  if (mine >= 3 || all >= 100) {
+    const err = new Error('Please choose one of the suggested monthly amounts, or try a new amount tomorrow.');
+    err.status = 429;
+    throw err;
+  }
   const plan = await getRazorpay().plans.create({
     period: 'monthly',
     interval: 1,
@@ -43,7 +55,7 @@ export async function getMonthlyPlan(amount, currency) {
   });
   await Plan.updateOne(
     { amount, currency },
-    { $setOnInsert: { razorpayPlanId: plan.id } },
+    { $setOnInsert: { razorpayPlanId: plan.id, ...(createdBy ? { createdBy } : {}) } },
     { upsert: true }
   );
   return (await Plan.findOne({ amount, currency })).razorpayPlanId;

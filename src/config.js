@@ -17,6 +17,11 @@ export const config = {
     webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET?.trim() || '',
   },
   googleClientId: (process.env.GOOGLE_CLIENT_ID || '1934199762-jh82prahuornnf1m98tvr2jgt77fm3uk.apps.googleusercontent.com').trim(),
+  appUrl: (process.env.APP_URL || '').trim().replace(/\/$/, ''),
+  resend: {
+    apiKey: (process.env.RESEND_API_KEY || '').trim(),
+    from: (process.env.EMAIL_FROM || 'Go fund my trip <no-reply@imarpan.in>').trim(),
+  },
   catboxUserhash: process.env.CATBOX_USERHASH || '',
   defaultCreator: process.env.DEFAULT_CREATOR || 'arpanpatra',
   currency: 'INR',

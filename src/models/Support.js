@@ -19,8 +19,13 @@ const supportSchema = new mongoose.Schema(
     tierName: { type: String, default: '' },
     product: { type: ObjectId, ref: 'Product' },
     productTitle: { type: String, default: '' },
+    moment: { type: ObjectId, ref: 'Moment', index: true, sparse: true },
+    momentTitle: { type: String, default: '' },
     buyerAnswer: { type: String, trim: true, maxlength: 1000, default: '' },
-    status: { type: String, enum: ['created', 'paid', 'failed'], default: 'created', index: true },
+    stockReserved: { type: Boolean, default: false },
+    status: { type: String, enum: ['created', 'paid', 'failed', 'refunded'], default: 'created', index: true },
+    originalAmount: Number,
+    amountRefunded: Number,
     razorpayOrderId: { type: String, index: true, sparse: true },
     razorpaySubscriptionId: { type: String, index: true, sparse: true },
     razorpayPaymentId: { type: String, unique: true, sparse: true },
@@ -42,6 +47,7 @@ supportSchema.methods.toPublic = function () {
     monthly: this.monthly,
     tierName: this.tierName,
     productTitle: this.productTitle,
+    momentTitle: this.momentTitle || '',
     createdAt: this.paidAt || this.createdAt,
   };
 };

@@ -7,6 +7,8 @@ import { Post } from '../models/Post.js';
 import { MembershipTier } from '../models/MembershipTier.js';
 import { Membership } from '../models/Membership.js';
 import { Product } from '../models/Product.js';
+import { Moment } from '../models/Moment.js';
+import { itineraryFor, readMoment } from '../lib/moments.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sanitizePost, excerptOf, firstImage } from '../lib/html.js';
 import { uploadFile, baseType } from '../lib/catbox.js';
@@ -51,6 +53,7 @@ const txn = (s, emailOf) => ({
   monthly: s.monthly,
   tierName: s.tierName,
   productTitle: s.productTitle,
+  momentTitle: s.momentTitle || '',
   buyerAnswer: s.buyerAnswer,
   status: s.status,
   paymentId: s.razorpayPaymentId || '',
@@ -85,7 +88,7 @@ router.get('/overview', async (req, res) => {
 
 router.get('/transactions', async (req, res) => {
   const creator = req.user._id;
-  const status = ['paid', 'created', 'failed'].includes(req.query.status) ? req.query.status : 'paid';
+  const status = ['paid', 'created', 'failed', 'refunded'].includes(req.query.status) ? req.query.status : 'paid';
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const filter = { creator, status };
   if (['tip', 'membership', 'shop'].includes(req.query.type)) {
@@ -370,6 +373,47 @@ router.delete('/products/:id', async (req, res) => {
     return res.json({ archived: true });
   }
   await product.deleteOne();
+  res.json({ deleted: true });
+});
+
+router.get('/itinerary', async (req, res) => {
+  res.json({ items: await itineraryFor(req.user._id, { includeHidden: true }) });
+});
+
+router.post('/itinerary', async (req, res) => {
+  const { error, value } = readMoment(req.body || {});
+  if (error) return res.status(400).json({ error });
+  const count = await Moment.countDocuments({ creator: req.user._id });
+  if (count >= 200) return res.status(400).json({ error: 'You can add up to 200 moments' });
+  const moment = await Moment.create({ creator: req.user._id, ...value });
+  res.status(201).json({ item: moment.toPublic() });
+});
+
+router.put('/itinerary/:id', async (req, res) => {
+  if (!validId(req.params.id)) return res.status(404).json({ error: 'Moment not found' });
+  const moment = await Moment.findOne({ _id: req.params.id, creator: req.user._id });
+  if (!moment) return res.status(404).json({ error: 'Moment not found' });
+  if (req.body?.active !== undefined && Object.keys(req.body).length === 1) {
+    moment.active = Boolean(req.body.active);
+  } else {
+    const { error, value } = readMoment({ ...moment.toObject(), ...req.body });
+    if (error) return res.status(400).json({ error });
+    Object.assign(moment, value);
+  }
+  await moment.save();
+  res.json({ item: moment.toPublic() });
+});
+
+router.delete('/itinerary/:id', async (req, res) => {
+  if (!validId(req.params.id)) return res.status(404).json({ error: 'Moment not found' });
+  const moment = await Moment.findOne({ _id: req.params.id, creator: req.user._id });
+  if (!moment) return res.status(404).json({ error: 'Moment not found' });
+  if (await Support.exists({ moment: moment._id, status: 'paid' })) {
+    moment.active = false;
+    await moment.save();
+    return res.json({ archived: true });
+  }
+  await moment.deleteOne();
   res.json({ deleted: true });
 });
 

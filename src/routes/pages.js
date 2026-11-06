@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import multer from 'multer';
 import { User } from '../models/User.js';
 import { Support } from '../models/Support.js';
@@ -11,10 +12,19 @@ import { parseYouTubeId } from '../lib/youtube.js';
 import { Post } from '../models/Post.js';
 import { MembershipTier } from '../models/MembershipTier.js';
 import { Product } from '../models/Product.js';
+import { Moment } from '../models/Moment.js';
+import { itineraryFor } from '../lib/moments.js';
+import { withUsernames } from '../lib/profiles.js';
+import { Account } from '../models/Account.js';
 
 const router = Router();
 
 const PAGE_SIZE = 5;
+
+const RESERVED_SLUGS = new Set([
+  'about', 'account', 'api', 'admin', 'assets', 'contact', 'dashboard', 'default', 'disclaimer', 'forgot-password', 'hall-of-fame', 'hof',
+  'login', 'logout', 'privacy', 'refund-policy', 'reset-password', 'return-policy', 'shipping-policy', 'signup', 'terms',
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -25,12 +35,13 @@ const upload = multer({
 });
 
 export async function creatorPayload(creator) {
-  const [posts, tiers, products] = await Promise.all([
+  const [posts, tiers, products, moments] = await Promise.all([
     Post.countDocuments({ creator: creator._id, status: 'published' }),
     creator.membershipEnabled ? MembershipTier.countDocuments({ creator: creator._id, active: true }) : 0,
     Product.countDocuments({ creator: creator._id, active: true }),
+    Moment.countDocuments({ creator: creator._id, active: true }),
   ]);
-  return { ...creator.toPublic(), tabs: { posts, membership: tiers > 0, shop: products } };
+  return { ...creator.toPublic(), tabs: { posts, membership: tiers > 0, shop: products, itinerary: moments } };
 }
 
 async function latestPosts(creatorId) {
@@ -54,28 +65,33 @@ async function totalRaised(creatorId) {
   return (row?.total || 0) / 100;
 }
 
-async function supportersPage(creatorId, before) {
+async function supportersPage(creatorId, before, beforeId) {
   const filter = { creator: creatorId, status: 'paid' };
-  if (before) filter.paidAt = { $lt: new Date(before) };
-  const rows = await Support.find(filter).sort({ paidAt: -1 }).limit(PAGE_SIZE + 1);
+  if (before && beforeId) {
+    const at = new Date(before);
+    filter.$or = [{ paidAt: { $lt: at } }, { paidAt: at, _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }];
+  } else if (before) {
+    filter.paidAt = { $lt: new Date(before) };
+  }
+  const rows = await Support.find(filter).sort({ paidAt: -1, _id: -1 }).limit(PAGE_SIZE + 1);
   const hasMore = rows.length > PAGE_SIZE;
-  return { supporters: rows.slice(0, PAGE_SIZE).map((s) => s.toPublic()), hasMore };
+  return { supporters: await withUsernames(rows.slice(0, PAGE_SIZE)), hasMore };
 }
 
 router.get('/default', async (req, res) => {
-  const creator = await User.findOne({ slug: config.defaultCreator });
+  const creator = await User.defaultCreator(config.defaultCreator);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   res.json({ slug: creator.slug, creator: await creatorPayload(creator) });
 });
 
 router.get('/:slug/profile', async (req, res) => {
-  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   res.json({ creator: await creatorPayload(creator) });
 });
 
 router.get('/:slug', async (req, res) => {
-  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   const [page, supporterCount, payload, posts, raised] = await Promise.all([
     supportersPage(creator._id),
@@ -88,28 +104,35 @@ router.get('/:slug', async (req, res) => {
 });
 
 router.get('/:slug/supporters', async (req, res) => {
-  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
-  const before = req.query.before && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : null;
-  res.json(await supportersPage(creator._id, before));
+  const before = typeof req.query.before === 'string' && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : null;
+  const beforeId = typeof req.query.beforeId === 'string' && mongoose.isValidObjectId(req.query.beforeId) ? req.query.beforeId : null;
+  res.json(await supportersPage(creator._id, before, beforeId));
+});
+
+router.get('/:slug/itinerary', async (req, res) => {
+  const creator = await User.findBySlug(req.params.slug);
+  if (!creator) return res.status(404).json({ error: 'Page not found' });
+  res.json({ items: await itineraryFor(creator._id) });
 });
 
 router.get('/:slug/hall-of-fame', async (req, res) => {
-  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   const period = req.query.period === 'month' ? 'month' : 'all';
   res.json(await leaderboard(creator._id, { period, viewerId: optionalViewerId(req) }));
 });
 
 router.get('/:slug/hall-of-fame/supporters', async (req, res) => {
-  const creator = await User.findOne({ slug: req.params.slug.toLowerCase() });
+  const creator = await User.findBySlug(req.params.slug);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   const page = Math.min(1000, Math.max(1, parseInt(req.query.page, 10) || 1));
   res.json(await supporterList(creator._id, { page, viewerId: optionalViewerId(req) }));
 });
 
 router.put('/me', requireAuth, async (req, res) => {
-  const { name, siteName, mention, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact, featuredVideo, goal } = req.body || {};
+  const { slug, name, siteName, mention, destination, seoDescription, about, links, themeColor, suggestedAmounts, supportButtonText, recurringEnabled, contact, featuredVideo, goal } = req.body || {};
   const user = req.user;
 
   if (name !== undefined) {
@@ -117,8 +140,23 @@ router.put('/me', requireAuth, async (req, res) => {
     if (!v) return res.status(400).json({ error: 'Name is required' });
     user.name = v.slice(0, 60);
   }
+  if (slug !== undefined) {
+    const next = String(slug).trim().toLowerCase();
+    if (next !== user.slug) {
+      if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(next) || next.includes('--')) {
+        return res.status(400).json({ error: 'Page URL must be 3–40 characters: lowercase letters, numbers and single hyphens' });
+      }
+      if (RESERVED_SLUGS.has(next)) return res.status(400).json({ error: 'That page URL is reserved' });
+      if ((await User.slugInUse(next, user._id)) || (await Account.exists({ username: next }))) {
+        return res.status(400).json({ error: 'That page URL is taken' });
+      }
+      user.slug = next;
+    }
+  }
   if (siteName !== undefined) user.siteName = String(siteName).trim().slice(0, 40);
   if (mention !== undefined) user.mention = String(mention).trim().slice(0, 60);
+  if (destination !== undefined) user.destination = String(destination).replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (seoDescription !== undefined) user.seoDescription = String(seoDescription).replace(/\s+/g, ' ').trim().slice(0, 160);
   if (about !== undefined) user.about = sanitizeAbout(String(about)).slice(0, 20000);
   if (Array.isArray(links)) {
     user.links = links
@@ -128,7 +166,7 @@ router.put('/me', requireAuth, async (req, res) => {
       .slice(0, 10);
   }
   if (themeColor !== undefined) {
-    if (!/^#[0-9a-f]{6}$/i.test(themeColor)) return res.status(400).json({ error: 'Invalid theme color' });
+    if (typeof themeColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(themeColor)) return res.status(400).json({ error: 'Invalid theme color' });
     user.themeColor = themeColor.toUpperCase();
   }
   if (Array.isArray(suggestedAmounts)) {

@@ -24,7 +24,7 @@ export async function startCheckout({ support, creator, actor, extraNotes = {} }
 
   try {
     if (support.monthly) {
-      const planId = await getMonthlyPlan(support.amount, support.currency);
+      const planId = await getMonthlyPlan(support.amount, support.currency, actor.id);
       const subscription = await getRazorpay().subscriptions.create({
         plan_id: planId,
         total_count: 120,
@@ -49,8 +49,8 @@ export async function startCheckout({ support, creator, actor, extraNotes = {} }
   } catch (err) {
     support.status = 'failed';
     await support.save();
-    console.error('Razorpay create failed:', err);
-    return { ok: false, status: 502, error: razorpayError(err) };
+    if (!err?.status) console.error('Razorpay create failed:', err);
+    return { ok: false, status: err?.status || 502, error: razorpayError(err) };
   }
 }
 

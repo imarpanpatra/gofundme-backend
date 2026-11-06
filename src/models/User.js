@@ -5,10 +5,13 @@ const userSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, maxlength: 60 },
     siteName: { type: String, trim: true, default: '' },
     mention: { type: String, trim: true, default: '' },
+    destination: { type: String, trim: true, default: '' },
+    seoDescription: { type: String, trim: true, default: '' },
     slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
     googleId: { type: String, index: true, sparse: true },
+    passwordChangedAt: Date,
     avatar: { type: String, default: '' },
     cover: { type: String, default: '' },
     about: { type: String, default: '' },
@@ -35,11 +38,29 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+userSchema.statics.findBySlug = function (slug, projection) {
+  const s = String(slug || '').trim().toLowerCase();
+  if (!s) return Promise.resolve(null);
+  return this.findOne({ slug: s }, projection);
+};
+
+userSchema.statics.slugInUse = function (slug, exceptId) {
+  const filter = { slug };
+  if (exceptId) filter._id = { $ne: exceptId };
+  return this.exists(filter);
+};
+
+userSchema.statics.defaultCreator = async function (defaultSlug, projection) {
+  return (await this.findOne({ slug: defaultSlug }, projection)) || this.findOne({}, projection).sort({ createdAt: 1 });
+};
+
 userSchema.methods.toPublic = function () {
   return {
     name: this.name,
     siteName: this.siteName || '',
     mention: this.mention || '',
+    destination: this.destination || '',
+    seoDescription: this.seoDescription || '',
     slug: this.slug,
     avatar: this.avatar,
     cover: this.cover,

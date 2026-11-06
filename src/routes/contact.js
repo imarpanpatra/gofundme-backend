@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import { limiter } from '../lib/limiter.js';
 import { config } from '../config.js';
 import { User } from '../models/User.js';
 import { ContactMessage } from '../models/ContactMessage.js';
@@ -7,7 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-const contactLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a few minutes and try again.' } });
+const contactLimiter = limiter('contactLimiter', 60 * 60 * 1000, 10);
 
 router.post('/', contactLimiter, async (req, res) => {
   const { name, email, subject, message } = req.body || {};
@@ -23,7 +23,7 @@ router.post('/', contactLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Message is too long' });
   }
 
-  const creator = await User.findOne({ slug: config.defaultCreator });
+  const creator = await User.defaultCreator(config.defaultCreator);
   if (!creator) return res.status(404).json({ error: 'Page not found' });
   await ContactMessage.create({ creator: creator._id, ...clean });
   res.status(201).json({ ok: true });

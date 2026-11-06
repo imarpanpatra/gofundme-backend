@@ -12,6 +12,8 @@ import membershipRoutes from './routes/memberships.js';
 import shopRoutes from './routes/shop.js';
 import accountRoutes from './routes/account.js';
 import contactRoutes from './routes/contact.js';
+import profileRoutes from './routes/profiles.js';
+import seoRoutes from './routes/seo.js';
 
 const app = express();
 
@@ -58,6 +60,8 @@ app.use('/api/memberships', membershipRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/account', accountRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/profiles', profileRoutes);
+app.use('/api/seo', seoRoutes);
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((err, req, res, next) => {
