@@ -16,7 +16,7 @@ import {
 import { requireAccount } from '../middleware/auth.js';
 import { startCheckout, parseAmount } from '../lib/checkout.js';
 import { onPaid, onRefunded, onSubscriptionStatus } from '../lib/fulfillment.js';
-import { uploadFile, baseType, isCatboxUrl } from '../lib/catbox.js';
+import { uploadFile, baseType, isStoredFileUrl } from '../lib/storage.js';
 
 const router = Router();
 
@@ -66,7 +66,7 @@ router.post('/order', orderLimiter, requireAccount, async (req, res) => {
   if (moment && paise > remaining * 100) {
     return res.status(400).json({ error: `Only ₹${remaining.toLocaleString('en-IN')} is left on this moment` });
   }
-  if (videoUrl && !isCatboxUrl(videoUrl)) return res.status(400).json({ error: 'Invalid video message' });
+  if (videoUrl && !isStoredFileUrl(videoUrl)) return res.status(400).json({ error: 'Invalid video message' });
 
   const support = await Support.create({
     creator: creator._id,

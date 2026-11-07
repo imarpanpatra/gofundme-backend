@@ -11,7 +11,7 @@ import { Moment } from '../models/Moment.js';
 import { itineraryFor, readMoment } from '../lib/moments.js';
 import { requireAuth } from '../middleware/auth.js';
 import { sanitizePost, excerptOf, firstImage } from '../lib/html.js';
-import { uploadFile, baseType } from '../lib/catbox.js';
+import { uploadFile, baseType } from '../lib/storage.js';
 import { config } from '../config.js';
 
 const router = Router();

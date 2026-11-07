@@ -6,7 +6,7 @@ import { Support } from '../models/Support.js';
 import { requireAuth, optionalViewerId } from '../middleware/auth.js';
 import { leaderboard, supporterList } from '../lib/hallOfFame.js';
 import { config } from '../config.js';
-import { uploadImage, deleteImage } from '../lib/catbox.js';
+import { uploadFile as uploadImage, deleteFile as deleteImage } from '../lib/storage.js';
 import { sanitizeAbout } from '../lib/html.js';
 import { parseYouTubeId } from '../lib/youtube.js';
 import { Post } from '../models/Post.js';

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 
 const CATBOX_API = 'https://catbox.moe/user/api.php';
-const EXT = {
+export const EXT = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/webp': '.webp',
@@ -70,7 +70,7 @@ export async function uploadFile({ buffer, contentType, prefix }) {
   const fields = { reqtype: 'fileupload' };
   if (config.catboxUserhash) fields.userhash = config.catboxUserhash;
   const res = await post(fields, { name, contentType: type || 'application/octet-stream', buffer }, 25000);
-  if (res.status !== 200 || !/^https:\/\/files\.catbox\.moe\//.test(res.text)) {
+  if (!/^https:\/\/files\.catbox\.moe\/[A-Za-z0-9._-]+$/.test(res.text)) {
     const err = new Error(`Upload failed (${res.status}): ${res.text.slice(0, 120)}`);
     err.status = 502;
     throw err;

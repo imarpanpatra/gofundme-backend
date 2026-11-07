@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { config } from './config.js';
 import { User } from './models/User.js';
-import { uploadImage, deleteImage } from './lib/catbox.js';
+import { uploadFile as uploadImage, deleteFile as deleteImage } from './lib/storage.js';
 
 const SEED_ASSETS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'seed-assets');
 const reset = process.argv.includes('--reset');
